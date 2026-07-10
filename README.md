@@ -1,5 +1,7 @@
 # lobehub-builtin-blocker
 
+> 最终部署镜像：`lobehub/lobehub:canary-antipollute`。`canary-mcpfix` 是中间基础镜像，`canary-patched` 是已废弃的旧命名。
+
 Patch minified LobeHub Docker images to fix MCP session bugs and disable polluted builtin tools/skills — without rebuilding from source.
 
 对 LobeHub Docker 镜像打补丁：修复 MCP session 复用 bug，并通过环境变量禁用污染对话的内置工具/技能，无需从源码重新构建。
@@ -271,17 +273,17 @@ These tools have **meaningful systemRole pollution** AND **cannot be reliably di
 
 ### 1. Copy files to server / 复制文件到服务器
 
-Place these files in the same directory as your `docker-compose.yml`:
+The production deployment on `hkhe` keeps the official compose file unchanged and uses two explicit override layers:
 
 ```
 /opt/lobehub/
-├── docker-compose.yml                    # Official (unchanged / 官方，不动)
-├── docker-compose.patched.yml            # Override
-├── .env                                  # Official (unchanged / 官方，不动)
-├── .env.example                          # Copy as .env.patched
-├── mcp_patch.py                          # MCP session fix
-├── antipollute_patch.py                  # Builtin blacklist
-└── repatch.sh                            # One-shot script
+├── docker-compose.yml                    # Official (unchanged)
+├── docker-compose.mcpfix.yml             # Intermediate image override
+├── docker-compose.antipollute.yml        # Final image override
+├── .env                                  # Official runtime config
+├── .env.antipollute                      # DISABLED_BUILTIN_TOOLS
+├── mcpfix/                               # MCP session patch script
+└── antipollute/                          # Builtin blacklist patch script
 ```
 
 ### 2. Configure / 配置
@@ -289,7 +291,7 @@ Place these files in the same directory as your `docker-compose.yml`:
 Copy `.env.example` to `.env.patched` in the same directory as `docker-compose.yml`:
 
 ```bash
-cp .env.example .env.patched
+cp .env.example .env.antipollute
 # Edit to toggle patches and set blacklist / 按需调整开关和黑名单
 ```
 
@@ -314,7 +316,7 @@ This will:
 3. Discover minified chunks by grep
 4. Apply patches (mcp 5 points + antipollute 6 points)
 5. `node --check` syntax validation on each patched chunk
-6. `docker commit` → `lobehub/lobehub:canary-patched`
+6. `docker commit` → `lobehub/lobehub:canary-antipollute`
 7. Restart the lobehub service via override compose
 
 ### 4. Verify / 验证
@@ -334,12 +336,13 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3210/
 
 ### 5. Update / 更新
 
-When LobeHub releases a new canary:
+When LobeHub releases a new canary, rebuild the intermediate MCP image first and then the final image:
 ```bash
-bash repatch.sh  # pulls latest + reapplies patches + restarts
+bash /opt/lobehub/mcpfix/repatch.sh
+bash /opt/lobehub/antipollute/repatch.sh
 ```
 
-When official fix for MCP merges: set `ENABLE_MCPFIX=false` in `.env.patched`, run `bash repatch.sh`.
+When official fix for MCP merges: set `ENABLE_MCPFIX=false` in `.env.antipollute`, then rebuild the final image.
 
 当官方合并 MCP 修复后：在 `.env.patched` 设置 `ENABLE_MCPFIX=false`，运行 `bash repatch.sh`。
 
@@ -369,7 +372,7 @@ Both patches operate on **minified Next.js server chunks** (`.next/server/chunks
 Both 补丁都作用于 Docker 镜像内 **编译后的 Next.js server chunk**（`.next/server/chunks/*.js`）。采用精确字符串替换 — 找到锚点字符串，替换为包含环境变量驱动过滤逻辑的版本。
 
 Key design principles / 核心设计原则：
-- **Env-driven**: blacklist from `DISABLED_BUILTIN_TOOLS`, patches from `.env.patched` — no rebuild needed for config changes
+- **Env-driven**: blacklist from `DISABLED_BUILTIN_TOOLS`; changing the blacklist only requires recreating the container, not rebuilding the image
 - **Fail-safe**: if anchor strings don't match (version changed), the script exits with error and never produces a broken image
 - **Non-destructive**: override compose files, official `docker-compose.yml` and `.env` untouched
 - **Reversible**: switch back to official image anytime by dropping the override
@@ -388,8 +391,8 @@ Key design principles / 核心设计原则：
 | `repatch.sh` | One-shot: pull → patch → commit → restart |
 | `mcp_patch.py` | MCP session fix patch logic (5 points) |
 | `antipollute_patch.py` | Builtin blacklist patch logic (6 points) |
-| `docker-compose.patched.yml` | Compose override pointing to patched image |
-| `.env.example` | Configuration template (copy as `.env.patched`) |
+| `docker-compose.antipollute.yml` | Final override pointing to `canary-antipollute` |
+| `.env.example` | Configuration template (copy as `.env.antipollute`) |
 
 ---
 

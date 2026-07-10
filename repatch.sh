@@ -1,5 +1,5 @@
 #!/bin/bash
-# repatch.sh — One-shot repatch: builds lobehub/lobehub:canary-patched
+# repatch.sh — One-shot repatch: builds lobehub/lobehub:canary-antipollute
 #
 # Combines two independent patches in sequence:
 #   1. mcpfix   — MCP session reuse fix (5 patch points)
@@ -10,7 +10,7 @@
 #   ENABLE_ANTIPOLLUTE=true  # Apply builtin tool blacklist
 #
 # Image tag produced:
-#   lobehub/lobehub:canary-patched   (contains all enabled patches)
+#   lobehub/lobehub:canary-antipollute (contains all enabled patches)
 #
 # ⚠️  Official LobeHub fix:
 #   MCP session reuse: branch `fix/mcp-session-retry` (5a0d13f)
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 cd /opt/lobehub
-SCRIPT_DIR=/opt/lobehub/lobehub-builtin-blocker
+SCRIPT_DIR=${SCRIPT_DIR:-/opt/lobehub/lobehub-builtin-blocker}
 
 # Load .env if present
 if [ -f .env ]; then
@@ -119,14 +119,14 @@ else
 fi
 
 echo ""
-echo "[5/6] commit 成 lobehub/lobehub:canary-patched..."
+echo "[5/6] commit 成 lobehub/lobehub:canary-antipollute..."
 NEW_ID=$(docker commit \
   --change 'ENTRYPOINT ["/bin/node"]' \
   --change 'CMD ["/app/startServer.js"]' \
-  repatch-tmp lobehub/lobehub:canary-patched)
+  repatch-tmp lobehub/lobehub:canary-antipollute)
 echo "  新镜像: $NEW_ID"
 
-EP=$(docker inspect lobehub/lobehub:canary-patched --format '{{json .Config.Entrypoint}}')
+EP=$(docker inspect lobehub/lobehub:canary-antipollute --format '{{json .Config.Entrypoint}}')
 if [ "$EP" != '["/bin/node"]' ]; then
   echo "ERROR: commit 后 entrypoint 异常: $EP (期望 [\"/bin/node\"])" >&2
   exit 1
@@ -135,10 +135,10 @@ echo "  entrypoint 已恢复: $EP"
 
 echo ""
 echo "[6/6] 用 override compose recreate lobe..."
-docker compose -f docker-compose.yml -f docker-compose.patched.yml up -d --force-recreate lobe
+docker compose -f docker-compose.yml -f docker-compose.antipollute.yml up -d --force-recreate lobe
 
 echo ""
-echo "✅ 完成！补丁镜像: lobehub/lobehub:canary-patched"
+echo "✅ 完成！补丁镜像: lobehub/lobehub:canary-antipollute"
 echo ""
 echo "验证命令:"
 echo "  # 检查补丁是否存活"

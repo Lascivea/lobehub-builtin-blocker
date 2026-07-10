@@ -1,0 +1,8 @@
+# Final production override.
+# Use together with the official LobeHub compose file.
+services:
+  lobe:
+    image: lobehub/lobehub:canary-antipollute
+    restart: unless-stopped
+    environment:
+      - DISABLED_BUILTIN_TOOLS=${DISABLED_BUILTIN_TOOLS:-}
