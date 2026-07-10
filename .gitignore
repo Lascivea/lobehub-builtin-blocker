@@ -1,0 +1,24 @@
+# 本地测试文件
+.env
+.env.local
+*.test.js
+*.test.py
+
+# Python
+__pycache__/
+*.pyc
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Docker 运行时
+/tmp/
+
+# 构建产物
+build/
+dist/

@@ -1,0 +1,8 @@
+services:
+  lobehub:
+    image: lobehub/lobehub:canary-patched
+    restart: unless-stopped
+    environment:
+      - DISABLED_BUILTIN_TOOLS=${DISABLED_BUILTIN_TOOLS:-}
+    # 其他配置继承自 docker-compose.yml
+    # 此文件仅覆盖镜像和补丁相关环境变量
