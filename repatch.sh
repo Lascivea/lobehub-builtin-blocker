@@ -112,7 +112,7 @@ if [ "$ENABLE_ANTIPOLLUTE" = "true" ]; then
     base=$(basename "$chunk")
     docker cp "$WORK/$base" "repatch-tmp:$chunk"
   done
-  echo "  (antipollute) 6 个补丁点全部完成"
+  echo "  (antipollute) 7 个补丁点全部完成"
 else
   echo ""
   echo "[4/6] (antipollute) 跳过 (ENABLE_ANTIPOLLUTE=false)"

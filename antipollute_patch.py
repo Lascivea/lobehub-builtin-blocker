@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Patch minified Next.js chunks to disable polluted builtin tools/skills.
 
-Six patch points, all env-driven by DISABLED_BUILTIN_TOOLS (comma-separated):
+Seven patch points, all env-driven by DISABLED_BUILTIN_TOOLS (comma-separated):
   P1: Activator getToolManifests    - skip blacklisted tool ids
   P2: toolManifestMap construction  - skip blacklisted tool ids at build time
   P3: SkillEngine enableChecker     - block blacklisted skill identifiers
   P4: injectSelfFeedbackIntentTool  - block direct injection of lobe-self-iteration
   P5: TaskIdentifier forced plugin  - block lobe-task from being forced into plugins
   P6: post-filter after generateToolsDetailed - remove blacklisted from tools+enabledToolIds
+  P7: builtinTools registry - remove blacklisted tools from discovery candidates
 
 Empty / undefined DISABLED_BUILTIN_TOOLS = no filtering (official behavior).
 """
@@ -64,6 +65,10 @@ P5_NEW = 'e9.plugins=((process.env.DISABLED_BUILTIN_TOOLS||"").split(",").map(s=
 P6_OLD = 'eM("execAgent: enabled tool ids: %O",tE.enabledToolIds);let z=e=>'
 P6_NEW = 'eM("execAgent: enabled tool ids: %O",tE.enabledToolIds);let _bl=(process.env.DISABLED_BUILTIN_TOOLS||"").split(",").map(s=>s.trim()).filter(Boolean);tE.tools=tE.tools.filter(e=>{let n=e?.function?.name||e?.name;return!n||!_bl.some(id=>n.includes(id))});tE.enabledToolIds=tE.enabledToolIds.filter(id=>!_bl.some(bl=>id.includes(bl)));_bl.forEach(b=>{delete tC[b]});let z=e=>'
 
+# P7: builtinTools registry — remove blacklisted tools from <available_tools>
+P7_OLD = '].map(e=>({...e,avatar:e.manifest?.meta?.avatar,description:e.manifest?.meta?.description,tags:e.manifest?.meta?.tags,title:e.manifest?.meta?.title})),eE='
+P7_NEW = '].map(e=>({...e,avatar:e.manifest?.meta?.avatar,description:e.manifest?.meta?.description,tags:e.manifest?.meta?.tags,title:e.manifest?.meta?.title})).filter(e=>!((process.env.DISABLED_BUILTIN_TOOLS||"").split(",").map(s=>s.trim()).filter(Boolean).includes(e.identifier))),eE='
+
 PATCHES = [
     ("P1", P1_OLD, P1_NEW),
     ("P2", P2_OLD, P2_NEW),
@@ -71,6 +76,7 @@ PATCHES = [
     ("P4", P4_OLD, P4_NEW),
     ("P5", P5_OLD, P5_NEW),
     ("P6", P6_OLD, P6_NEW),
+    ("P7", P7_OLD, P7_NEW),
 ]
 
 
@@ -88,11 +94,19 @@ def patch(text):
 
 if __name__ == "__main__":
     dry = "--apply" not in sys.argv
-    files = [f for f in sys.argv[1:] if f != "--apply"]
+    only = None
+    for arg in sys.argv[1:]:
+        if arg.startswith("--only="):
+            only = {name.strip() for name in arg.split("=", 1)[1].split(",") if name.strip()}
+    files = [f for f in sys.argv[1:] if f != "--apply" and not f.startswith("--only=")]
     any_skip = False
     for f in files:
         s = open(f).read()
+        selected = [item for item in PATCHES if only is None or item[0] in only]
+        original = PATCHES[:]
+        PATCHES[:] = selected
         new, rep = patch(s)
+        PATCHES[:] = original
         print(f"{f}:")
         print("\n".join(rep))
         if any(r.endswith(": SKIP") for r in rep):

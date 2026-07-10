@@ -44,7 +44,7 @@ LobeHub 有两个尚未合并修复的已知问题：
 
 **官方修复**: `fix/mcp-session-retry` 分支 (commit `5a0d13f`) 实现了 `withSessionRetry()` 包装器。待合并到 canary/main 后，可单独关闭此补丁。
 
-### Patch 2: Builtin Tool Blacklist (6 patch points / 6 个补丁点)
+### Patch 2: Builtin Tool Blacklist (7 patch points / 7 个补丁点)
 
 | # | Target | Action |
 |---|--------|--------|
@@ -54,6 +54,7 @@ LobeHub 有两个尚未合并修复的已知问题：
 | P4 | `injectSelfFeedbackIntentTool` | Block direct injection of lobe-self-iteration |
 | P5 | `TaskIdentifier` forced plugin | Block lobe-task forced injection |
 | P6 | Post-filter `generateToolsDetailed` | Remove blacklisted from tools + enabledToolIds + manifestMap |
+| P7 | `builtinTools` registry | Remove blacklisted tools from `<available_tools>` discovery candidates |
 
 **Result**: Disabled tools are removed from the LLM's function list, cannot be activated, and their systemRole text is stripped from the context. The model never sees them.
 
@@ -390,7 +391,8 @@ Key design principles / 核心设计原则：
 |------|---------|
 | `repatch.sh` | One-shot: pull → patch → commit → restart |
 | `mcp_patch.py` | MCP session fix patch logic (5 points) |
-| `antipollute_patch.py` | Builtin blacklist patch logic (6 points) |
+| `antipollute_patch.py` | Builtin blacklist patch logic (7 points) |
+| `patch-discovery.sh` | Add P7 to an existing final image when the official canary cannot be pulled |
 | `docker-compose.antipollute.yml` | Final override pointing to `canary-antipollute` |
 | `.env.example` | Configuration template (copy as `.env.antipollute`) |
 
