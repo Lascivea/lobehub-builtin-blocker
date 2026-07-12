@@ -3,7 +3,7 @@
 #
 # Combines two independent patches in sequence:
 #   1. mcpfix   — MCP session reuse fix (5 patch points)
-#   2. antipollute — Disable polluted builtin tools/skills (6 patch points)
+#   2. antipollute — Disable polluted builtin tools/skills (7 patch points)
 #
 # Toggle via .env file:
 #   ENABLE_MCPFIX=true       # Apply MCP session fix
@@ -29,7 +29,8 @@ fi
 
 ENABLE_MCPFIX=${ENABLE_MCPFIX:-true}
 ENABLE_ANTIPOLLUTE=${ENABLE_ANTIPOLLUTE:-true}
-WORK=/tmp/repatch-work
+WORK_MCP=/tmp/repatch-mcp-work
+WORK_ANTI=/tmp/repatch-anti-work
 
 echo "=== repatch.sh ==="
 echo "  ENABLE_MCPFIX     = $ENABLE_MCPFIX"
@@ -50,7 +51,7 @@ docker run -d --name repatch-tmp --entrypoint sleep lobehub/lobehub:canary infin
 
 cleanup() {
   docker rm -f repatch-tmp 2>/dev/null || true
-  rm -rf "$WORK"
+  rm -rf "$WORK_MCP" "$WORK_ANTI"
 }
 trap cleanup EXIT
 
@@ -65,22 +66,22 @@ if [ "$ENABLE_MCPFIX" = "true" ]; then
   fi
   echo "  发现 ${#CHUNKS[@]} 个 chunk"
 
-  rm -rf "$WORK"; mkdir -p "$WORK"
+  rm -rf "$WORK_MCP"; mkdir -p "$WORK_MCP"
   for chunk in "${CHUNKS[@]}"; do
     base=$(basename "$chunk")
-    docker cp "repatch-tmp:$chunk" "$WORK/$base"
+    docker cp "repatch-tmp:$chunk" "$WORK_MCP/$base"
   done
 
   echo "  打补丁 + 语法校验..."
-  python3 "$SCRIPT_DIR/mcp_patch.py" "$WORK"/*.js --apply
-  for f in "$WORK"/*.js; do
+  python3 "$SCRIPT_DIR/mcp_patch.py" "$WORK_MCP"/*.js --apply
+  for f in "$WORK_MCP"/*.js; do
     docker run --rm -v "$f":/check.js node:22-alpine node --check /check.js
   done
   for chunk in "${CHUNKS[@]}"; do
     base=$(basename "$chunk")
-    docker cp "$WORK/$base" "repatch-tmp:$chunk"
+    docker cp "$WORK_MCP/$base" "repatch-tmp:$chunk"
   done
-  echo "  (mcpfix) 5 个补丁点全部完成"
+  echo "  (mcpfix) 补丁完成"
 else
   echo ""
   echo "[3/6] (mcpfix) 跳过 (ENABLE_MCPFIX=false)"
@@ -89,30 +90,45 @@ fi
 # ─── Builtin tool blacklist ────────────────────────────────────────────────────
 if [ "$ENABLE_ANTIPOLLUTE" = "true" ]; then
   echo ""
-  echo "[4/6] (antipollute) 发现 getToolManifests chunk..."
-  mapfile -t CHUNKS < <(docker exec repatch-tmp sh -c 'grep -rl getToolManifests /app/.next/server/chunks/ 2>/dev/null')
-  if [ "${#CHUNKS[@]}" -eq 0 ]; then
+  echo "[4/6] (antipollute) 发现 chunk..."
+  mapfile -t CHUNKS_P1P6 < <(docker exec repatch-tmp sh -c 'grep -rl getToolManifests /app/.next/server/chunks/ 2>/dev/null')
+  if [ "${#CHUNKS_P1P6[@]}" -eq 0 ]; then
     echo "ERROR: 没找到含 getToolManifests 的 chunk" >&2
     exit 1
   fi
-  echo "  发现 ${#CHUNKS[@]} 个 chunk"
+  mapfile -t CHUNKS_P7 < <(docker exec repatch-tmp sh -c 'grep -rl "avatar:e.manifest?.meta?.avatar" /app/.next/server/chunks/ 2>/dev/null')
+  if [ "${#CHUNKS_P7[@]}" -eq 0 ]; then
+    echo "ERROR: 没找到 builtinTools discovery chunk" >&2
+    exit 1
+  fi
+  echo "  P1-P6 chunk 数: ${#CHUNKS_P1P6[@]}"
+  echo "  P7   chunk 数: ${#CHUNKS_P7[@]}"
 
-  rm -rf "$WORK"; mkdir -p "$WORK"
-  for chunk in "${CHUNKS[@]}"; do
+  rm -rf "$WORK_ANTI"; mkdir -p "$WORK_ANTI"
+  for chunk in "${CHUNKS_P1P6[@]}"; do
     base=$(basename "$chunk")
-    docker cp "repatch-tmp:$chunk" "$WORK/$base"
+    docker cp "repatch-tmp:$chunk" "$WORK_ANTI/p1p6_$base"
+  done
+  for chunk in "${CHUNKS_P7[@]}"; do
+    base=$(basename "$chunk")
+    docker cp "repatch-tmp:$chunk" "$WORK_ANTI/p7_$base"
   done
 
   echo "  打补丁 + 语法校验..."
-  python3 "$SCRIPT_DIR/antipollute_patch.py" "$WORK"/*.js --apply
-  for f in "$WORK"/*.js; do
+  python3 "$SCRIPT_DIR/antipollute_patch.py" --only=P1,P2,P3,P4,P5,P6 --apply "$WORK_ANTI"/p1p6_*.js
+  python3 "$SCRIPT_DIR/antipollute_patch.py" --only=P7 --apply "$WORK_ANTI"/p7_*.js
+  for f in "$WORK_ANTI"/*.js; do
     docker run --rm -v "$f":/check.js node:22-alpine node --check /check.js
   done
-  for chunk in "${CHUNKS[@]}"; do
+  for chunk in "${CHUNKS_P1P6[@]}"; do
     base=$(basename "$chunk")
-    docker cp "$WORK/$base" "repatch-tmp:$chunk"
+    docker cp "$WORK_ANTI/p1p6_$base" "repatch-tmp:$chunk"
   done
-  echo "  (antipollute) 7 个补丁点全部完成"
+  for chunk in "${CHUNKS_P7[@]}"; do
+    base=$(basename "$chunk")
+    docker cp "$WORK_ANTI/p7_$base" "repatch-tmp:$chunk"
+  done
+  echo "  (antipollute) 补丁完成"
 else
   echo ""
   echo "[4/6] (antipollute) 跳过 (ENABLE_ANTIPOLLUTE=false)"
@@ -135,13 +151,12 @@ echo "  entrypoint 已恢复: $EP"
 
 echo ""
 echo "[6/6] 用 override compose recreate lobe..."
-docker compose -f docker-compose.yml -f docker-compose.antipollute.yml up -d --force-recreate lobe
+docker compose -f docker-compose.yml -f docker-compose.mcpfix.yml -f docker-compose.antipollute.yml up -d --force-recreate lobe
 
 echo ""
 echo "✅ 完成！补丁镜像: lobehub/lobehub:canary-antipollute"
 echo ""
 echo "验证命令:"
-echo "  # 检查补丁是否存活"
 if [ "$ENABLE_MCPFIX" = "true" ]; then
   echo "  docker exec lobehub sh -c 'grep -rl reinitializing /app/.next/server/chunks/'"
 fi

@@ -1,88 +1,76 @@
 # lobehub-builtin-blocker
 
-> 最终部署镜像：`lobehub/lobehub:canary-antipollute`。`canary-mcpfix` 是中间基础镜像，`canary-patched` 是已废弃的旧命名。
-
-Patch minified LobeHub Docker images to fix MCP session bugs and disable polluted builtin tools/skills — without rebuilding from source.
-
-对 LobeHub Docker 镜像打补丁：修复 MCP session 复用 bug，并通过环境变量禁用污染对话的内置工具/技能，无需从源码重新构建。
-
----
-
-## Why / 为什么
-
-LobeHub has two known issues that lack merged fixes:
-
-1. **MCP session reuse bug**: `MCPService` caches `MCPClient` instances in a module-level Map keyed by connection params. When sessions expire (server restart, timeout), stale clients are never evicted, causing all HTTP MCP tools to silently fail. Official fix exists in branch `fix/mcp-session-retry` but is not yet merged.
-
-2. **Polluted builtin tools**: Certain builtin tools inject long `systemRole` prompts into the conversation system message even when the user never calls them. `allowExplicitActivation` bypasses all enable rules, so user-configured "off" has no effect. There is no official UI toggle to fully disable these.
-
-This project patches the minified Next.js server chunks in the Docker image to solve both — with env-driven blacklist that can be toggled without rebuilding.
-
-LobeHub 有两个尚未合并修复的已知问题：
-
-1. **MCP session 复用 bug**：`MCPService` 用模块级 Map 缓存 MCPClient，session 失效后从不清理，导致 HTTP 型 MCP 工具静默失败。官方修复在 `fix/mcp-session-retry` 分支但尚未合并。
-
-2. **内置工具污染**：某些内置工具的 `systemRole` 会注入系统提示词，即使用户从不调用它。`allowExplicitActivation` 机制绕过所有启用规则，用户配置"关闭"无效。目前没有官方 UI 可以完全禁用这些。
-
-本项目通过补丁 Docker 镜像内的 minified Next.js chunk 来解决两个问题 — 黑名单由环境变量控制，修改后重启容器即可生效，无需重新打补丁。
+> **Status Update / 状态更新 (2025-07)**
+>
+> LobeHub 官方 canary 已经提供 **per-agent 禁用内置工具** 的能力，因此大多数用户**不再需要**这个全局补丁项目。
+>
+> 本仓库现在主要保留两样有价值的内容：
+> 1. **推荐关闭哪些内置工具**（见下表，注意：**记忆不要关**）。
+> 2. 在官方 canary Docker 镜像尚未包含该功能、或 MCP session 官方修复未合并前的过渡补丁。
+>
+> 如果你运行的是最新 `lobehub/lobehub:canary`，建议优先使用官方 per-agent 方案。
 
 ---
 
-## What It Does / 功能
+## TL;DR: 现在推荐怎么做
 
-### Patch 1: MCP Session Fix (5 patch points / 5 个补丁点)
-
-| # | Target | Action |
-|---|--------|--------|
-| P1 | `MCPClient.listTools` | Broaden session-expiry error regex |
-| P2 | `MCPClient.callTool` | Throw `NoValidSessionId` on session expiry |
-| P3 | `MCPClient.listResources` | Same as P2 |
-| P4 | `MCPClient.listPrompts` | Same as P2 |
-| P5 | `MCPService.callTool` | One-shot retry with fresh client |
-
-**Official fix**: Branch `fix/mcp-session-retry` (commit `5a0d13f`) implements `withSessionRetry()`. This patch will be deprecated once merged.
-
-**官方修复**: `fix/mcp-session-retry` 分支 (commit `5a0d13f`) 实现了 `withSessionRetry()` 包装器。待合并到 canary/main 后，可单独关闭此补丁。
-
-### Patch 2: Builtin Tool Blacklist (7 patch points / 7 个补丁点)
-
-| # | Target | Action |
-|---|--------|--------|
-| P1 | Activator `getToolManifests` | Skip blacklisted IDs at runtime |
-| P2 | `toolManifestMap` construction | Skip blacklisted IDs at build time |
-| P3 | `SkillEngine` enableChecker | Block blacklisted skills |
-| P4 | `injectSelfFeedbackIntentTool` | Block direct injection of lobe-self-iteration |
-| P5 | `TaskIdentifier` forced plugin | Block lobe-task forced injection |
-| P6 | Post-filter `generateToolsDetailed` | Remove blacklisted from tools + enabledToolIds + manifestMap |
-| P7 | `builtinTools` registry | Remove blacklisted tools from `<available_tools>` discovery candidates |
-
-**Result**: Disabled tools are removed from the LLM's function list, cannot be activated, and their systemRole text is stripped from the context. The model never sees them.
-
-**效果**: 被禁用的工具从 LLM 的 function 列表中移除，无法被激活，其 systemRole 从上下文中剥离。模型根本看不到这些工具。
+1. **升级**到最新 `lobehub/lobehub:canary`。
+2. **在每个助手 / Agent 的设置里**，把下面"推荐禁用"的工具加入 per-agent 禁用列表（`disabledBuiltinToolIds` / `disabledPluginIds`）。
+3. **保留 `memory` 开启**——自动记忆很有用，不建议关闭。
+4. 如果 HTTP MCP 工具在服务端重启后仍然失效，说明官方 session retry 还没合并到 canary，此时再启用本仓库的 MCP patch。
 
 ---
 
-## Recommended Blacklist / 推荐黑名单
+## 推荐关闭的内置工具（per-agent 黑名单）
 
-9 tools that inject polluting systemRole prompts / 9 个注入污染性提示词的工具：
+这些工具会注入污染性 systemRole 提示词，且过去无法通过 UI 可靠关闭。**现在可以用官方 per-agent 禁用列表关闭它们。**
 
-| Identifier | UI Name | What it does / 污染表现 |
+| Identifier | UI Name | 污染表现 |
 |---|---|---|
-| `lobe-web-browsing` | Web Browsing | Forced footnotes, "let me search first" / 强制脚注，搜索强迫症 |
-| `lobe-task` | Task Tools | Over-structured task management / 小问题也建任务清单 |
-| `lobe-delivery-checker` | Delivery Check Verifier | Acceptance plan before every answer / 回答前先整验收标准 |
-| `agent-signal-review` | Agent Signal Nightly Review | Nightly self-review systemRole / 每晚自省 |
-| `agent-signal-reflection` | Agent Signal Self-Reflection | Post-turn reflection / 回合后自省 |
-| `agent-signal-feedback-intent` | Agent Signal Self-Feedback Intent | Self-feedback meta-role / 自我反馈意图 |
-| `agent-signal-skill-management` | Agent Signal Skill Management | Feedback → managed skills / 反馈固化 |
-| `lobe-self-iteration` | Self Feedback Intent | Meta-agent self-iteration / 元 agent 角色词 |
-| `lobehub` | LobeHub | Identity table → "LobeHub platform agent" / 平台身份劫持 |
+| `lobe-web-browsing` | Web Browsing | 强制脚注、搜索强迫症 |
+| `lobe-task` | Task Tools | 小问题也建任务清单 |
+| `lobe-delivery-checker` | Delivery Check Verifier | 回答前先整验收标准 |
+| `agent-signal-review` | Agent Signal Nightly Review | 每晚自省 |
+| `agent-signal-reflection` | Agent Signal Self-Reflection | 回合后自省 |
+| `agent-signal-feedback-intent` | Agent Signal Self-Feedback Intent | 自我反馈意图 |
+| `agent-signal-skill-management` | Agent Signal Skill Management | 反馈固化 |
+| `lobe-self-iteration` | Self Feedback Intent | 元 agent 自我迭代 |
+| `lobehub` | LobeHub | 平台身份劫持 |
+
+### 哪些工具**不要**关？
+
+| Identifier | 原因 |
+|---|---|
+| `memory` | 自动记忆是 LobeHub 核心体验，**不建议关闭**。 |
+| `knowledge-base` | 只有启用知识库时才工作，污染很低。 |
+| `cloud-sandbox` | 仅在 cloud 运行时启用。 |
+| `calculator`, `message` | 无 systemRole 污染。 |
+
+---
+
+## 官方方案 vs 本补丁
+
+### 官方已经解决的
+
+| 问题 | 官方状态 | 说明 |
+|---|---|---|
+| 内置工具污染 | ✅ canary 已支持 per-agent 禁用 | 官方在 canary 中增加了 `disabledBuiltinToolIds` / `disabledPluginIds`，可按助手单独禁用。 |
+| `lobe-web-browsing` 默认关闭 | ✅ 可用 `DEFAULT_AGENT_CONFIG` | 设置 `DEFAULT_AGENT_CONFIG=chatConfig.searchMode=off` 可让新建/未显式配置的助手默认不联网。 |
+| MCP session 复用 bug | 🔄 官方修复存在但未合并 | `fix/mcp-session-retry` 分支实现了 `withSessionRetry()`；Docker Hub canary 镜像目前仍需要本补丁。 |
+
+### 本补丁的剩余价值
+
+- 你的 canary 镜像比较旧，还没有 per-agent 禁用功能。
+- 你想要**全局强制**禁用某些工具（但 per-agent 通常已经够用）。
+- 你还在等 MCP session 官方修复合并。
+
+---
 
 ## How LobeHub Decides Which Tools Are Enabled / LobeHub 工具启用机制
 
 LobeHub's tool enablement is **not** simply "user toggles UI checkbox". It uses a **three-layer model** where later layers can override earlier ones:
 
-LobeHub 的工具启用**不是**简单的"用户勾选 UI"。它使用**三层模型**,后面的层可以覆盖前面的：
+LobeHub 的工具启用**不是**简单的"用户勾选 UI"。它使用**三层模型**，后面的层可以覆盖前面的：
 
 ```
 Layer 1: defaultToolIds     — 12 tools always loaded into candidate pool
@@ -130,24 +118,24 @@ These tools behave differently based on whether they are in `defaultToolIds`:
 - **Result**: Less token usage & less bias in most conversations, but tool can still appear when model thinks it's relevant
 
 **勾选（固定启用）**: systemRole 注入到**每次**系统提示
-**取消勾选（自动启用）**: systemRole 不注入系统提示,但模型可调用 `activateTools` 按需激活
-**结果**: 大多数对话占用更少 token & 减少倾向偏差,但模型认为相关时仍可能激活
+**取消勾选（自动启用）**: systemRole 不注入系统提示，但模型可调用 `activateTools` 按需激活
+**结果**: 大多数对话占用更少 token & 减少倾向偏差，但模型认为相关时仍可能激活
 
 | Identifier | UI Name | Notes / 备注 |
 |---|---|---|
 | `agent-documents` | Documents | Document management / 文档管理 |
 | `topic-reference` | Topic Reference | Topic references / 话题引用 |
-| `task` | Task Tools | Task management, verbose systemRole / 任务管理,冗长 systemRole |
+| `task` | Task Tools | Task management, verbose systemRole / 任务管理，冗长 systemRole |
 | `web-browsing` | Web Browsing | Forced footnotes / 强制脚注 (also runtime managed) |
 | `knowledge-base` | Knowledge Base | KB queries / 知识库查询 (also runtime managed) |
-| `memory` | Memory | Auto-memory / 自动记忆 (also runtime managed) |
+| `memory` | Memory | Auto-memory / 自动记忆 (also runtime managed) **不要关** |
 | `cloud-sandbox` | Cloud Sandbox | Code execution / 代码执行 (also runtime managed) |
 | `local-system` | Local System | Desktop / 桌面端 (also runtime managed) |
-| `lobe-agent` | Lobe Agent | Plan/todo/sub-agent / 计划/子agent (also alwaysOn) |
+| `lobe-agent` | Lobe Agent | Plan/todo/sub-agent / 计划/子 agent (also alwaysOn) |
 
 **Key insight**: `task` is a special case — it's in `defaultToolIds` but NOT in `alwaysOnToolIds` or `runtimeManagedToolIds`. So unchecking it genuinely reduces pollution (its systemRole prompt is ~30 lines), but the tool can still be activated via `activateTools`. Most of the time unchecking is enough; add to blacklist only if model keeps activating it.
 
-**关键洞察**：`task` 是特殊情况 — 它在 `defaultToolIds` 但不在 `alwaysOnToolIds` 或 `runtimeManagedToolIds` 中。所以取消勾选确实减少污染（它的 systemRole ~30 行）,但工具仍可通过 `activateTools` 激活。大多数时候取消勾选就够了；只有模型一直激活它时才需要加入黑名单。
+**关键洞察**：`task` 是特殊情况 — 它在 `defaultToolIds` 但不在 `alwaysOnToolIds` 或 `runtimeManagedToolIds` 中。所以取消勾选确实减少污染（它的 systemRole ~30 行），但工具仍可通过 `activateTools` 激活。大多数时候取消勾选就够了；只有模型一直激活它时才需要加入黑名单。
 
 #### 2b. NOT in `defaultToolIds` — UI Uncheck = Fully Disabled
 #### 2b. 不在 `defaultToolIds` 中 — UI 取消勾选 = 完全禁用
@@ -165,7 +153,7 @@ These tools behave differently based on whether they are in `defaultToolIds`:
 
 **Mechanism / 机制**: These are not in any always-on or auto-load list. UI uncheck puts them in `uninstalledBuiltinTools`, which filters them out of the manifest map entirely. They don't even appear in model's tool list.
 
-**机制**: 这些工具不在任何 always-on 或 auto-load 列表中。UI 取消勾选把它们放入 `uninstalledBuiltinTools`,会被从 manifest map 完全过滤。它们甚至不出现在模型的工具列表里。
+**机制**: 这些工具不在任何 always-on 或 auto-load 列表中。UI 取消勾选把它们放入 `uninstalledBuiltinTools`，会被从 manifest map 完全过滤。它们甚至不出现在模型的工具列表里。
 
 **Result**: Fully disabled. Uncheck in UI is enough — no env var needed.
 
@@ -239,26 +227,41 @@ These are the worst polluters. Their systemRole gives the model "self-reflection
 | `creds` | Credentials lookup only |
 | `topic-reference` | Only `hidden: true`, no `discoverable: false` |
 
-### Summary: Which Tools Need Env-Var Blacklist? / 总结：哪些需要环境变量黑名单？
+---
 
-These tools have **meaningful systemRole pollution** AND **cannot be reliably disabled via UI** (due to `allowExplicitActivation` bypass, `alwaysOnToolIds`, or `runtimeManagedToolIds` forcing):
+## What This Patch Project Does / 本补丁项目做了什么
 
-这些工具有**明显的 systemRole 污染**且**无法通过 UI 可靠禁用**（由于 `allowExplicitActivation` 绕过、`alwaysOnToolIds` 或 `runtimeManagedToolIds` 强制）：
+> **推荐先使用上面的官方方案。** 只有在你必须改 Docker 镜像、或官方功能尚未可用时，才需要看下面这部分。
 
-**The 9 in our recommended blacklist / 推荐黑名单的 9 个**:
-- `web-browsing` — forced footnotes, "let me search first"
-- `task` — over-structured task management
-- `delivery-checker` — acceptance plan before every answer
-- `agent-signal-review` — nightly self-review
-- `agent-signal-reflection` — post-turn reflection
-- `agent-signal-feedback-intent` — self-feedback meta-role
-- `agent-signal-skill-management` — feedback → managed skills
-- `self-feedback-intent` — meta-agent self-iteration
-- `lobehub` — Identity table, platform agent role
+### Patch 1: MCP Session Fix (5 patch points / 5 个补丁点)
 
-**Why these specifically**: They are all in `defaultToolIds` or are builtin skills (always loaded), AND they have `discoverable: false`/`hidden: true` (not visible in UI), AND they inject substantial `systemRole`/`content` text into the system prompt.
+| # | Target | Action |
+|---|---|---|
+| P1 | `MCPClient.listTools` | Broaden session-expiry error regex |
+| P2 | `MCPClient.callTool` | Throw `NoValidSessionId` on session expiry |
+| P3 | `MCPClient.listResources` | Same as P2 |
+| P4 | `MCPClient.listPrompts` | Same as P2 |
+| P5 | `MCPService.callTool` | One-shot retry with fresh client |
 
-**为什么选这些**：它们都在 `defaultToolIds` 中或是内置技能（始终加载），且有 `discoverable: false`/`hidden: true`（UI 不可见），并注入大量 `systemRole`/`content` 到系统提示词。
+**Official fix**: Branch `fix/mcp-session-retry` implements `withSessionRetry()`. This patch will be deprecated once merged into canary/main and available in the Docker image.
+
+**官方修复**: `fix/mcp-session-retry` 分支实现了 `withSessionRetry()` 包装器。待合并到 canary/main 并在 Docker 镜像中可用后，可废弃此补丁。
+
+### Patch 2: Builtin Tool Blacklist (7 patch points / 7 个补丁点)
+
+| # | Target | Action |
+|---|---|---|
+| P1 | Activator `getToolManifests` | Skip blacklisted IDs at runtime |
+| P2 | `toolManifestMap` construction | Skip blacklisted IDs at build time |
+| P3 | `SkillEngine` enableChecker | Block blacklisted skills |
+| P4 | `injectSelfFeedbackIntentTool` | Block direct injection of lobe-self-iteration |
+| P5 | `TaskIdentifier` forced plugin | Block lobe-task forced injection |
+| P6 | Post-filter `generateToolsDetailed` | Remove blacklisted from tools + enabledToolIds + manifestMap |
+| P7 | `builtinTools` registry | Remove blacklisted tools from `<available_tools>` discovery candidates |
+
+**Result**: Disabled tools are removed from the LLM's function list, cannot be activated, and their systemRole text is stripped from the context. The model never sees them.
+
+**效果**: 被禁用的工具从 LLM 的 function 列表中移除，无法被激活，其 systemRole 从上下文中剥离。模型根本看不到这些工具。
 
 ---
 
@@ -289,7 +292,7 @@ The production deployment on `hkhe` keeps the official compose file unchanged an
 
 ### 2. Configure / 配置
 
-Copy `.env.example` to `.env.patched` in the same directory as `docker-compose.yml`:
+Copy `.env.example` to `.env.antipollute` in the same directory as `docker-compose.yml`:
 
 ```bash
 cp .env.example .env.antipollute
@@ -299,7 +302,7 @@ cp .env.example .env.antipollute
 Key options:
 ```bash
 ENABLE_MCPFIX=true        # set false after official fix is merged
-ENABLE_ANTIPOLLUTE=true   # set false to keep all builtin tools
+ENABLE_ANTIPOLLUTE=true   # set false if official per-agent disable works for you
 
 DISABLED_BUILTIN_TOOLS=lobe-web-browsing,lobe-task,...
 ```
@@ -315,7 +318,7 @@ This will:
 1. `docker pull lobehub/lobehub:canary` (get latest / 拉最新版本)
 2. Start a temporary container
 3. Discover minified chunks by grep
-4. Apply patches (mcp 5 points + antipollute 6 points)
+4. Apply patches (mcp 5 points + antipollute 7 points)
 5. `node --check` syntax validation on each patched chunk
 6. `docker commit` → `lobehub/lobehub:canary-antipollute`
 7. Restart the lobehub service via override compose
@@ -328,7 +331,7 @@ docker exec lobehub sh -c 'grep -rl serializeParams /app/.next/server/chunks/ | 
 # Expected: >0 (mcpfix)
 
 docker exec lobehub sh -c 'grep -rl DISABLED_BUILTIN_TOOLS /app/.next/server/chunks/ | wc -l'
-# Expected: >0 (antipollute, typically 6)
+# Expected: >0 (antipollute, typically 6-7)
 
 # Check service health
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3210/
@@ -345,7 +348,7 @@ bash /opt/lobehub/antipollute/repatch.sh
 
 When official fix for MCP merges: set `ENABLE_MCPFIX=false` in `.env.antipollute`, then rebuild the final image.
 
-当官方合并 MCP 修复后：在 `.env.patched` 设置 `ENABLE_MCPFIX=false`，运行 `bash repatch.sh`。
+当官方合并 MCP 修复后：在 `.env.antipollute` 设置 `ENABLE_MCPFIX=false`，运行 `bash repatch.sh`。
 
 ---
 
@@ -388,7 +391,7 @@ Key design principles / 核心设计原则：
 ## File Reference / 文件说明
 
 | File | Purpose |
-|------|---------|
+|---|---|
 | `repatch.sh` | One-shot: pull → patch → commit → restart |
 | `mcp_patch.py` | MCP session fix patch logic (5 points) |
 | `antipollute_patch.py` | Builtin blacklist patch logic (7 points) |

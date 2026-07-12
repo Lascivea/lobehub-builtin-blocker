@@ -16,58 +16,59 @@ SESSION_RE = r"/no valid session id provided|session.*not found|session rebuild 
 P1_OLD = 'e.message.includes("No valid session ID provided")'
 P1_NEW = f'{SESSION_RE}.test(e.message)'
 
-# P2: MCPClient.callTool - add catch
-P2_OLD = 'async callTool(e,t){V("Calling tool: %s with args: %O, timeout: %O",e,t,B);let r=await this.mcp.callTool({arguments:t,name:e},void 0,{timeout:B});return V("Tool call result: %O",r),r}'
-P2_NEW = ('async callTool(e,t){V("Calling tool: %s with args: %O, timeout: %O",e,t,B);'
+# P2: MCPClient.callTool - add catch (logger renamed V->J in recent canary)
+P2_OLD = 'async callTool(e,t){J("Calling tool: %s with args: %O, timeout: %O",e,t,B);let r=await this.mcp.callTool({arguments:t,name:e},void 0,{timeout:B});return J("Tool call result: %O",r),r}'
+P2_NEW = ('async callTool(e,t){J("Calling tool: %s with args: %O, timeout: %O",e,t,B);'
           'try{let r=await this.mcp.callTool({arguments:t,name:e},void 0,{timeout:B});'
-          'return V("Tool call result: %O",r),r}'
+          'return J("Tool call result: %O",r),r}'
           'catch(e){if(e instanceof Error&&' + SESSION_RE + '.test(e.message))'
           'throw new Error("NoValidSessionId",{cause:e});throw e}}')
 
 # P3: MCPClient.listResources - add NoValidSessionId throw in catch
-P3_OLD = 'async listResources(){try{V("Listing resources...");let{resources:e}=await this.mcp.listResources();return V("Listed resources: %O",e),e}catch(e){return V("Listed resources: %O",e),[]}}'
-P3_NEW = ('async listResources(){try{V("Listing resources...");let{resources:e}=await this.mcp.listResources();'
-          'return V("Listed resources: %O",e),e}'
+P3_OLD = 'async listResources(){try{J("Listing resources...");let{resources:e}=await this.mcp.listResources();return J("Listed resources: %O",e),e}catch(e){return J("Listed resources: %O",e),[]}}'
+P3_NEW = ('async listResources(){try{J("Listing resources...");let{resources:e}=await this.mcp.listResources();'
+          'return J("Listed resources: %O",e),e}'
           'catch(e){if(e instanceof Error&&' + SESSION_RE + '.test(e.message))'
-          'throw new Error("NoValidSessionId",{cause:e});return V("Listed resources: %O",e),[]}}')
+          'throw new Error("NoValidSessionId",{cause:e});return J("Listed resources: %O",e),[]}}')
 
 # P4: MCPClient.listPrompts
-P4_OLD = 'async listPrompts(){try{V("Listing prompts...");let{prompts:e}=await this.mcp.listPrompts();return V("Listed prompts: %O",e),e}catch(e){return V("Listed prompts: %O",e),[]}}'
-P4_NEW = ('async listPrompts(){try{V("Listing prompts...");let{prompts:e}=await this.mcp.listPrompts();'
-          'return V("Listed prompts: %O",e),e}'
+P4_OLD = 'async listPrompts(){try{J("Listing prompts...");let{prompts:e}=await this.mcp.listPrompts();return J("Listed prompts: %O",e),e}catch(e){return J("Listed prompts: %O",e),[]}}'
+P4_NEW = ('async listPrompts(){try{J("Listing prompts...");let{prompts:e}=await this.mcp.listPrompts();'
+          'return J("Listed prompts: %O",e),e}'
           'catch(e){if(e instanceof Error&&' + SESSION_RE + '.test(e.message))'
-          'throw new Error("NoValidSessionId",{cause:e});return V("Listed prompts: %O",e),[]}}')
+          'throw new Error("NoValidSessionId",{cause:e});return J("Listed prompts: %O",e),[]}}')
 
 # P5: MCPService.callTool - wrap with one-shot retry on NoValidSessionId
+# Updated for canary where McpError is "s.McpError" and TRPCError is "o.TRPCError"
 P5_OLD = (
-    'async callTool(e){let{clientParams:t,toolName:i,argsStr:s,processContentBlocks:a}=e,'
-    'l=await this.getClient(t),c=(0,r.safeParseJSON)(s),u=this.sanitizeForLogging(t);'
-    'en(`Calling tool "${i}" using client for params: %O with args: %O`,u,c);'
-    'try{let e=await l.callTool(i,c),t=await ei.processToolCallResult(e,a);'
-    'return en(`Tool "${i}" called successfully for params: %O, result: %O`,u,t.state),t}'
-    'catch(e){if(e instanceof o.McpError)return{content:e.message,error:e,'
+    'async callTool(e){let{clientParams:t,toolName:a,argsStr:i,processContentBlocks:n}=e,'
+    'l=await this.getClient(t),c=(0,r.safeParseJSON)(i),d=this.sanitizeForLogging(t);'
+    'ea(`Calling tool "${a}" using client for params: %O with args: %O`,d,c);'
+    'try{let e=await l.callTool(a,c),t=await ei.processToolCallResult(e,n);'
+    'return ea(`Tool "${a}" called successfully for params: %O, result: %O`,d,t.state),t}'
+    'catch(e){if(e instanceof s.McpError)return{content:e.message,error:e,'
     'state:{content:[{text:e.message,type:"text"}],isError:!0},success:!1};'
-    'throw console.error(`Error calling tool "${i}" for params %O:`,this.sanitizeForLogging(t),e),'
-    'new n.TRPCError({cause:e,code:"INTERNAL_SERVER_ERROR",'
-    'message:`Error calling tool "${i}" on MCP server: ${e.message}`})}}'
+    'throw console.error(`Error calling tool "${a}" for params %O:`,this.sanitizeForLogging(t),e),'
+    'new o.TRPCError({cause:e,code:"INTERNAL_SERVER_ERROR",'
+    'message:`Error calling tool "${a}" on MCP server: ${e.message}`})}}'
 )
 P5_NEW = (
     'async callTool(e){let _run=async()=>{'
-    'let{clientParams:t,toolName:i,argsStr:s,processContentBlocks:a}=e,'
-    'l=await this.getClient(t),c=(0,r.safeParseJSON)(s),u=this.sanitizeForLogging(t);'
-    'en(`Calling tool "${i}" using client for params: %O with args: %O`,u,c);'
-    'try{let e=await l.callTool(i,c),t=await ei.processToolCallResult(e,a);'
-    'return en(`Tool "${i}" called successfully for params: %O, result: %O`,u,t.state),t}'
+    'let{clientParams:t,toolName:a,argsStr:i,processContentBlocks:n}=e,'
+    'l=await this.getClient(t),c=(0,r.safeParseJSON)(i),d=this.sanitizeForLogging(t);'
+    'ea(`Calling tool "${a}" using client for params: %O with args: %O`,d,c);'
+    'try{let e=await l.callTool(a,c),t=await ei.processToolCallResult(e,n);'
+    'return ea(`Tool "${a}" called successfully for params: %O, result: %O`,d,t.state),t}'
     'catch(e){if("NoValidSessionId"===e.message)throw e;'
-    'if(e instanceof o.McpError)return{content:e.message,error:e,'
+    'if(e instanceof s.McpError)return{content:e.message,error:e,'
     'state:{content:[{text:e.message,type:"text"}],isError:!0},success:!1};'
-    'throw console.error(`Error calling tool "${i}" for params %O:`,this.sanitizeForLogging(t),e),'
-    'new n.TRPCError({cause:e,code:"INTERNAL_SERVER_ERROR",'
-    'message:`Error calling tool "${i}" on MCP server: ${e.message}`})}};'
+    'throw console.error(`Error calling tool "${a}" for params %O:`,this.sanitizeForLogging(t),e),'
+    'new o.TRPCError({cause:e,code:"INTERNAL_SERVER_ERROR",'
+    'message:`Error calling tool "${a}" on MCP server: ${e.message}`})}};'
     'try{return await _run()}'
     'catch(err){if("NoValidSessionId"===err.message){'
     'let k=this.serializeParams(e.clientParams);this.clients.delete(k);'
-    'en(`Session expired for tool call, reinitializing client`);'
+    'ea(`Session expired for tool call, reinitializing client`);'
     'return await _run()}throw err}}'
 )
 
@@ -95,8 +96,10 @@ if __name__ == "__main__":
         new, rep = patch(s)
         print(f"{f}:")
         print("\n".join(rep))
-        if any(r.endswith(": SKIP") for r in rep):
-            any_skip = True
+        if any(": SKIP" in r for r in rep):
+            # 完全无关的文件(所有 patch 都 SKIP)不算失败
+            if not all(": SKIP" in r for r in rep):
+                any_skip = True
         if not dry and new != s:
             open(f, "w").write(new)
             print(f"  -> written")
